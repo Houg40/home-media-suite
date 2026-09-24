@@ -1,5 +1,7 @@
-import React from 'react';
-import { Play, Volume2, Maximize2, Clock, Film, Music, Image as ImageIcon, Heart, Folder, SlidersHorizontal } from 'lucide-react';
+import React, { useState } from 'react';
+import { Play, Volume2, Maximize2, Clock, Film, Music, Image as ImageIcon, Heart, Folder, SlidersHorizontal, LayoutGrid, List, Info } from 'lucide-react';
+import { cleanMediaTitle, formatBytes } from '../utils/formatters';
+import MediaInfoModal from './MediaInfoModal';
 
 export default function MediaGrid({ 
   media = [], 
@@ -11,6 +13,14 @@ export default function MediaGrid({
   onSelectMedia, 
   onToggleFavorite 
 }) {
+  const [viewMode, setViewMode] = useState(() => localStorage.getItem('aurora_view_mode') || 'grid');
+  const [selectedInfoItem, setSelectedInfoItem] = useState(null);
+
+  const toggleViewMode = (mode) => {
+    setViewMode(mode);
+    localStorage.setItem('aurora_view_mode', mode);
+  };
+
   const formatDuration = (sec) => {
     if (!sec) return '';
     const m = Math.floor(sec / 60);
@@ -101,11 +111,39 @@ export default function MediaGrid({
       {/* 2. Main Media Catalog */}
       <section>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <span>Media Catalog</span>
-            </h2>
-            <span className="text-xs text-zinc-500 font-mono">({media.length} items)</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <span>Media Catalog</span>
+              </h2>
+              <span className="text-xs text-zinc-500 font-mono">({media.length})</span>
+            </div>
+
+            {/* Grid vs List View Mode Toggle */}
+            <div className="flex items-center bg-zinc-900/90 p-0.5 rounded-xl border border-white/10 shrink-0">
+              <button
+                onClick={() => toggleViewMode('grid')}
+                className={`p-1.5 rounded-lg transition ${
+                  viewMode === 'grid' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20' 
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+                title="Grid View"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => toggleViewMode('list')}
+                className={`p-1.5 rounded-lg transition ${
+                  viewMode === 'list' 
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20' 
+                    : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+                title="List View (Full Names)"
+              >
+                <List className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
           {/* Folder Selection & Presentation Bar */}
@@ -167,12 +205,107 @@ export default function MediaGrid({
               Scan your PC media folders or add a custom folder in Library Settings to index your movies, songs, and photos.
             </p>
           </div>
+        ) : viewMode === 'list' ? (
+          /* Mobile-First List View (Full Names & Specs) */
+          <div className="flex flex-col gap-2.5">
+            {media.map(item => {
+              const isVideo = item.type === 'video';
+              const isAudio = item.type === 'audio';
+              const isImage = item.type === 'image';
+              const { clean, subtitle } = cleanMediaTitle(item.title, item.filename);
+
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => onSelectMedia(item)}
+                  className="glass-card rounded-2xl p-2.5 sm:p-3 flex items-center gap-3 sm:gap-4 hover:border-indigo-500/40 cursor-pointer group transition relative"
+                >
+                  {/* 16:9 Thumbnail Viewport */}
+                  <div className="relative w-28 sm:w-36 md:w-44 aspect-video rounded-xl overflow-hidden bg-zinc-900 shrink-0">
+                    {item.thumbnail_path ? (
+                      <img
+                        src={item.thumbnail_path}
+                        alt={clean}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-zinc-900/80">
+                        {isVideo && <Film className="w-6 h-6 text-zinc-700" />}
+                        {isAudio && <Music className="w-6 h-6 text-zinc-700" />}
+                        {isImage && <ImageIcon className="w-6 h-6 text-zinc-700" />}
+                      </div>
+                    )}
+
+                    {/* Hover play */}
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <div className="w-8 h-8 rounded-full bg-white text-zinc-950 flex items-center justify-center shadow">
+                        <Play className="w-4 h-4 fill-zinc-950 ml-0.5" />
+                      </div>
+                    </div>
+
+                    {/* Duration badge */}
+                    {item.duration > 0 && (
+                      <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-mono bg-black/80 text-zinc-200">
+                        {formatDuration(item.duration)}
+                      </span>
+                    )}
+                    {isImage && item.width > 0 && (
+                      <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-mono bg-black/80 text-zinc-200">
+                        {item.width}×{item.height}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Right Content Column */}
+                  <div className="flex-1 min-w-0 flex flex-col justify-center">
+                    <h3 className="font-bold text-xs sm:text-sm text-zinc-100 group-hover:text-indigo-300 transition line-clamp-2 leading-snug break-words">
+                      {clean}
+                    </h3>
+                    {subtitle && (
+                      <p className="text-[11px] font-mono text-zinc-400 truncate mt-0.5">
+                        {subtitle}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[10px] font-mono text-zinc-500">
+                      {getBadge(item) && (
+                        <span className="px-1.5 py-0.5 rounded uppercase font-bold bg-white/5 border border-white/10 text-indigo-300">
+                          {getBadge(item)}
+                        </span>
+                      )}
+                      {item.folder_name && (
+                        <span className="text-zinc-400 flex items-center gap-1">
+                          <Folder className="w-3 h-3" />
+                          <span className="truncate max-w-[120px]">{item.folder_name}</span>
+                        </span>
+                      )}
+                      <span>{formatBytes(item.filesize)}</span>
+                    </div>
+                  </div>
+
+                  {/* Quick Info Inspection Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedInfoItem(item);
+                    }}
+                    className="p-2 sm:p-2.5 rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-white/10 transition shrink-0"
+                    title="View file specs and exact filename"
+                  >
+                    <Info className="w-4 h-4" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         ) : (
+          /* Grid View with Multi-Line Wrapping (line-clamp-2 / line-clamp-3) */
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
             {media.map(item => {
               const isVideo = item.type === 'video';
               const isAudio = item.type === 'audio';
               const isImage = item.type === 'image';
+              const { clean, subtitle } = cleanMediaTitle(item.title, item.filename);
 
               return (
                 <div
@@ -185,7 +318,7 @@ export default function MediaGrid({
                     {item.thumbnail_path ? (
                       <img
                         src={item.thumbnail_path}
-                        alt={item.title}
+                        alt={clean}
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                         loading="lazy"
                       />
@@ -230,22 +363,31 @@ export default function MediaGrid({
                     </div>
                   </div>
 
-                  {/* Card Info */}
+                  {/* Card Info with Multi-Line Title Wrapping */}
                   <div className="p-3 flex-1 flex flex-col justify-between">
                     <div>
-                      <h3 className="font-bold text-xs text-zinc-100 truncate group-hover:text-indigo-300 transition">
-                        {item.title}
+                      <h3 className="font-bold text-xs text-zinc-100 line-clamp-2 sm:line-clamp-3 leading-snug group-hover:text-indigo-300 transition break-words">
+                        {clean}
                       </h3>
-                      {(item.artist || item.album) && (
-                        <p className="text-[11px] text-zinc-400 truncate mt-0.5">
-                          {item.artist || item.album}
+                      {subtitle && (
+                        <p className="text-[10px] font-mono text-zinc-500 truncate mt-0.5">
+                          {subtitle}
                         </p>
                       )}
                     </div>
 
                     <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/5 text-[10px] font-mono text-zinc-500 uppercase">
-                      <span>{item.container}</span>
-                      <span>{(item.filesize / (1024 * 1024)).toFixed(1)} MB</span>
+                      <span>{item.container} • {formatBytes(item.filesize)}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedInfoItem(item);
+                        }}
+                        className="text-zinc-500 hover:text-indigo-400 p-0.5"
+                        title="View file specs"
+                      >
+                        <Info className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -254,6 +396,15 @@ export default function MediaGrid({
           </div>
         )}
       </section>
+
+      {/* Quick Details Inspection Modal */}
+      {selectedInfoItem && (
+        <MediaInfoModal
+          item={selectedInfoItem}
+          onClose={() => setSelectedInfoItem(null)}
+          onPlayMedia={onSelectMedia}
+        />
+      )}
     </div>
   );
 }
