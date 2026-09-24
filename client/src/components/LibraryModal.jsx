@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, FolderPlus, Trash2, RefreshCw, Folder, HardDrive, Eye, EyeOff, CheckCircle } from 'lucide-react';
+import { X, FolderPlus, Trash2, RefreshCw, Folder, HardDrive, Eye, EyeOff, CheckCircle, Sparkles } from 'lucide-react';
 
 export default function LibraryModal({ 
   folders = [], 
@@ -7,6 +7,7 @@ export default function LibraryModal({
   onAddFolder, 
   onDeleteFolder, 
   onToggleFolder,
+  onOpenSetupWizard,
   onTriggerScan, 
   isScanning 
 }) {
@@ -156,11 +157,21 @@ export default function LibraryModal({
           </div>
         </div>
 
-        {/* Close Button */}
-        <div className="pt-2 flex justify-end">
+        {/* Footer Actions */}
+        <div className="pt-2 flex items-center justify-between border-t border-white/10">
+          {onOpenSetupWizard && (
+            <button
+              onClick={onOpenSetupWizard}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 text-xs font-semibold border border-indigo-500/20 transition"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Initial Setup Wizard</span>
+            </button>
+          )}
+
           <button
             onClick={onClose}
-            className="px-6 py-2.5 rounded-xl bg-white text-zinc-950 font-bold text-xs hover:bg-zinc-200 transition"
+            className="px-6 py-2.5 rounded-xl bg-white text-zinc-950 font-bold text-xs hover:bg-zinc-200 transition ml-auto"
           >
             Done
           </button>

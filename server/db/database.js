@@ -68,7 +68,15 @@ function initDb() {
         )
       `, () => {
         db.run("ALTER TABLE library_folders ADD COLUMN is_enabled INTEGER DEFAULT 1", () => {});
-        resolve(db);
+        db.run(`
+          CREATE TABLE IF NOT EXISTS system_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          )
+        `, () => {
+          resolve(db);
+        });
       });
     });
   });
@@ -102,10 +110,25 @@ function all(sql, params = []) {
   });
 }
 
+async function getSetting(key, defaultValue = null) {
+  const row = await get('SELECT value FROM system_settings WHERE key = ?', [key]);
+  return row ? row.value : defaultValue;
+}
+
+async function setSetting(key, value) {
+  await run(`
+    INSERT INTO system_settings (key, value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+  `, [key, String(value)]);
+}
+
 module.exports = {
   db,
   initDb,
   run,
   get,
-  all
+  all,
+  getSetting,
+  setSetting
 };

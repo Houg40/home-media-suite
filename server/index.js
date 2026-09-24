@@ -307,7 +307,104 @@ app.post('/api/library/scan', async (req, res) => {
   })();
 });
 
-// 12. Network & LAN Info
+// 12. Initial User Setup & Onboarding
+app.get('/api/setup/status', async (req, res) => {
+  try {
+    const setupCompleted = (await db.getSetting('setup_completed', '0')) === '1';
+    const userHome = process.env.USERPROFILE || 'C:\\Users\\ignac';
+
+    // Candidate folders detectable on Windows
+    const candidates = [
+      { path: path.join(userHome, 'Videos'), type: 'videos', name: 'My Videos', recommended: true, description: 'Movies, TV shows & home recordings' },
+      { path: path.join(userHome, 'Music'), type: 'music', name: 'My Music', recommended: true, description: 'Lossless audio, albums & tracks' },
+      { path: path.join(userHome, 'Pictures'), type: 'pictures', name: 'My Pictures', recommended: true, description: 'Photos, camera roll & wall art' },
+      { path: DEMO_DIR, type: 'all', name: 'Universal Format Showcase', recommended: true, description: 'Pre-generated MKV, AVI, FLAC & TIFF samples' },
+      { path: path.join(userHome, 'Downloads'), type: 'all', name: 'Downloads Directory', recommended: false, description: 'Browser and peer download folder' }
+    ];
+
+    // Detect additional drive letters
+    ['D:\\', 'E:\\', 'F:\\'].forEach(drive => {
+      if (fs.existsSync(drive)) {
+        candidates.push({
+          path: drive,
+          type: 'all',
+          name: `Drive (${drive.replace('\\', '')})`,
+          recommended: false,
+          description: `External or secondary storage drive ${drive}`
+        });
+      }
+    });
+
+    const detected = candidates.filter(c => fs.existsSync(c.path));
+    const configured = await db.all('SELECT * FROM library_folders ORDER BY id ASC');
+
+    res.json({
+      setupCompleted,
+      detectedFolders: detected,
+      configuredFolders: configured
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/setup/complete', async (req, res) => {
+  try {
+    const { folders = [] } = req.body;
+
+    for (const f of folders) {
+      if (f.path && fs.existsSync(f.path)) {
+        const isEnabled = f.is_enabled !== false ? 1 : 0;
+        const folderName = f.name || path.basename(f.path);
+        const folderType = f.type || 'all';
+
+        await db.run(`
+          INSERT INTO library_folders (path, type, name, is_enabled, last_scanned)
+          VALUES (?, ?, ?, ?, NULL)
+          ON CONFLICT(path) DO UPDATE SET 
+            type = excluded.type,
+            name = excluded.name,
+            is_enabled = excluded.is_enabled
+        `, [f.path, folderType, folderName, isEnabled]);
+      }
+    }
+
+    await db.setSetting('setup_completed', '1');
+
+    // Trigger initial scan of selected enabled folders in background
+    (async () => {
+      try {
+        console.log('--- Starting Initial Setup Media Scan ---');
+        const activeFolders = await db.all('SELECT * FROM library_folders WHERE is_enabled = 1');
+        for (const f of activeFolders) {
+          if (fs.existsSync(f.path)) {
+            console.log(`Initial scan: ${f.name} (${f.path})`);
+            await scanDirectory(f.path, f.id, f.name);
+            await db.run('UPDATE library_folders SET last_scanned = CURRENT_TIMESTAMP WHERE id = ?', [f.id]);
+          }
+        }
+        console.log('--- Initial Setup Media Scan Complete ---');
+      } catch (e) {
+        console.error('Initial setup scan error:', e);
+      }
+    })();
+
+    res.json({ success: true, message: 'Setup completed successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/setup/reset', async (req, res) => {
+  try {
+    await db.setSetting('setup_completed', '0');
+    res.json({ success: true, message: 'Setup reset' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 13. Network & LAN Info
 app.get('/api/system/network', (req, res) => {
   const ips = getNetworkIps();
   res.json({
@@ -321,12 +418,10 @@ app.get('/api/system/network', (req, res) => {
 // Startup sequence
 async function start() {
   await db.initDb();
-  await initDefaultLibraries();
 
   // Generate demo media showcasing universal format support
   try {
     await generateDemoMedia();
-    // Add demo directory to library folders
     await db.run(`
       INSERT OR IGNORE INTO library_folders (path, type, name, is_enabled, last_scanned)
       VALUES (?, 'all', 'Universal Format Showcase', 1, NULL)
@@ -339,15 +434,21 @@ async function start() {
     console.error('Demo media init error:', err);
   }
 
-  // Also trigger initial scan of Windows libraries in background
-  setTimeout(async () => {
-    const folders = await db.all('SELECT * FROM library_folders');
-    for (const f of folders) {
-      if (fs.existsSync(f.path) && f.path !== DEMO_DIR) {
-        scanDirectory(f.path, f.id, f.name).catch(console.error);
+  const isSetupDone = (await db.getSetting('setup_completed', '0')) === '1';
+
+  // Only perform background auto-scan if initial setup is already complete
+  if (isSetupDone) {
+    setTimeout(async () => {
+      const folders = await db.all('SELECT * FROM library_folders WHERE is_enabled = 1');
+      for (const f of folders) {
+        if (fs.existsSync(f.path) && f.path !== DEMO_DIR) {
+          scanDirectory(f.path, f.id, f.name).catch(console.error);
+        }
       }
-    }
-  }, 1000);
+    }, 1000);
+  } else {
+    console.log('--- Initial user setup pending: waiting for user folder selection in setup wizard ---');
+  }
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`=======================================================`);

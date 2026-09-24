@@ -9,6 +9,7 @@ import TurntableModal from './components/TurntableModal';
 import PhotoGalleryModal from './components/PhotoGalleryModal';
 import LibraryModal from './components/LibraryModal';
 import NetworkModal from './components/NetworkModal';
+import SetupWizardModal from './components/SetupWizardModal';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('all');
@@ -22,6 +23,7 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const [showNetworkModal, setShowNetworkModal] = useState(false);
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
 
   // Active Players State
   const [activeVideo, setActiveVideo] = useState(null);
@@ -49,6 +51,34 @@ export default function App() {
     if (outcome === 'accepted') {
       setDeferredPrompt(null);
     }
+  };
+
+  // Check if initial user setup is completed
+  useEffect(() => {
+    fetch('/api/setup/status')
+      .then(res => res.json())
+      .then(data => {
+        if (!data.setupCompleted) {
+          setShowSetupWizard(true);
+        }
+      })
+      .catch(console.error);
+  }, []);
+
+  const handleSetupComplete = () => {
+    setShowSetupWizard(false);
+    fetchMedia();
+    fetchFeatured();
+    fetchInProgress();
+    fetchLibraryFolders();
+    setIsScanning(true);
+    setTimeout(() => {
+      fetchMedia();
+      fetchFeatured();
+      fetchInProgress();
+      fetchLibraryFolders();
+      setIsScanning(false);
+    }, 4000);
   };
 
   // Fetch initial data & react to filters
@@ -284,6 +314,10 @@ export default function App() {
           onAddFolder={handleAddFolder}
           onDeleteFolder={handleDeleteFolder}
           onToggleFolder={handleToggleFolder}
+          onOpenSetupWizard={() => {
+            setShowLibraryModal(false);
+            setShowSetupWizard(true);
+          }}
           onTriggerScan={handleTriggerScan}
           isScanning={isScanning}
         />
@@ -294,6 +328,15 @@ export default function App() {
         <NetworkModal
           networkInfo={networkInfo}
           onClose={() => setShowNetworkModal(false)}
+        />
+      )}
+
+      {/* Initial User Setup & Onboarding Wizard */}
+      {showSetupWizard && (
+        <SetupWizardModal
+          isDismissable={true}
+          onClose={() => setShowSetupWizard(false)}
+          onCompleteSetup={handleSetupComplete}
         />
       )}
     </div>
