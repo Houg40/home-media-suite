@@ -404,16 +404,32 @@ app.post('/api/setup/reset', async (req, res) => {
   }
 });
 
-// 13. Network & LAN Info
+// 13. Serve production static frontend if built
+const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
+if (fs.existsSync(CLIENT_DIST)) {
+  app.use(express.static(CLIENT_DIST));
+}
+
+// 14. Network & LAN Info
 app.get('/api/system/network', (req, res) => {
   const ips = getNetworkIps();
+  const isProd = fs.existsSync(CLIENT_DIST);
+  const clientPort = isProd ? PORT : 5173;
   res.json({
     port: PORT,
     localIps: ips,
     streamUrls: ips.map(ip => `http://${ip}:${PORT}`),
-    clientUrls: ips.map(ip => `http://${ip}:5173`)
+    clientUrls: ips.map(ip => `http://${ip}:${clientPort}`)
   });
 });
+
+// Single Page Application Fallback (Client-side routing)
+if (fs.existsSync(CLIENT_DIST)) {
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+  });
+}
 
 // Startup sequence
 async function start() {
