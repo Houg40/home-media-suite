@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Production build
+dist/
+client/dist/
+
+# Server Dynamic & Local Media Database
+server/data/media.sqlite
+server/data/media.sqlite-journal
+server/data/thumbnails/
+server/data/demo_media/
+
+# Logs & temp
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment & System
+.env
+.env.local
+.DS_Store
+Thumbs.db

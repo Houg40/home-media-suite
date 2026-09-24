@@ -1,0 +1,16 @@
+{
+  "name": "home-media-suite-server",
+  "version": "1.0.0",
+  "description": "Adaptive universal streaming media server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mime-types": "^2.1.35",
+    "sqlite3": "^5.1.7"
+  }
+}
