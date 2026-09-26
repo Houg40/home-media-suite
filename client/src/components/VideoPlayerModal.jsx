@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Play, Pause, Volume2, VolumeX, Maximize, Minimize, 
-  RotateCcw, RotateCw, X, Settings, PictureInPicture2, Sparkles, Film 
+  RotateCcw, RotateCw, X, Settings, PictureInPicture2, Sparkles, Film, Loader2 
 } from 'lucide-react';
 
 export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
@@ -9,73 +9,141 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
 
   const videoRef = useRef(null);
   const containerRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [currentTime, setCurrentTime] = useState(0);
+  const controlsTimeoutRef = useRef(null);
+  const isSeekingRef = useRef(false);
+
+  // Resume position calculation
+  const initialOffset = (item.position_seconds > 5 && !item.completed) 
+    ? Math.min(item.position_seconds, Math.max(0, (item.duration || 999999) - 5)) 
+    : 0;
+
+  const streamOffsetRef = useRef(initialOffset);
+  const [streamOffset, setStreamOffset] = useState(initialOffset);
+  const [currentTime, setCurrentTime] = useState(initialOffset);
   const [duration, setDuration] = useState(item.duration || 0);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(true);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [seekPreviewTime, setSeekPreviewTime] = useState(initialOffset);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [showControls, setShowControls] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
-  const [resumed, setResumed] = useState(false);
-  const controlsTimeoutRef = useRef(null);
 
-  const streamUrl = `/api/stream/video/${item.id}`;
+  // Generates stream URL with offset timestamp
+  const getStreamUrl = (offset) => {
+    if (offset > 0) {
+      return `/api/stream/video/${item.id}?startTime=${Math.floor(offset)}&_t=${Date.now()}`;
+    }
+    return `/api/stream/video/${item.id}`;
+  };
 
-  // Auto-hide controls when mouse is still
-  const handleMouseMove = () => {
+  const [streamSrc, setStreamSrc] = useState(() => getStreamUrl(initialOffset));
+
+  // Controls auto-hide timer
+  const resetControlsTimer = () => {
     setShowControls(true);
     if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
     controlsTimeoutRef.current = setTimeout(() => {
-      if (isPlaying) setShowControls(false);
-    }, 3000);
+      if (isPlaying && !isSeekingRef.current) setShowControls(false);
+    }, 3500);
   };
 
+  const handleMouseMove = () => {
+    resetControlsTimer();
+  };
+
+  // Save watch progress to backend
+  const saveProgress = (pos) => {
+    const targetDuration = duration || item.duration || 0;
+    if (pos <= 0 || targetDuration <= 0) return;
+    const isCompleted = pos >= targetDuration * 0.92;
+    fetch(`/api/progress/${item.id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        position_seconds: Math.floor(pos),
+        duration_seconds: Math.floor(targetDuration),
+        completed: isCompleted ? 1 : 0
+      })
+    }).catch(() => {});
+
+    if (onProgressUpdate) {
+      onProgressUpdate(item.id, Math.floor(pos), Math.floor(targetDuration), isCompleted);
+    }
+  };
+
+  // Video timeupdate handler
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    // Check if we should resume from saved position
-    if (!resumed && item.position_seconds > 5 && !item.completed) {
-      video.currentTime = item.position_seconds;
-      setResumed(true);
-    }
-
     const handleTimeUpdate = () => {
-      setCurrentTime(video.currentTime);
-      if (video.duration && !isNaN(video.duration)) {
+      if (!video || isSeekingRef.current) return;
+      const actualTime = streamOffsetRef.current + video.currentTime;
+      setCurrentTime(actualTime);
+      if (!duration && video.duration && !isNaN(video.duration) && isFinite(video.duration)) {
         setDuration(video.duration);
       }
     };
 
     video.addEventListener('timeupdate', handleTimeUpdate);
     return () => video.removeEventListener('timeupdate', handleTimeUpdate);
-  }, [item, resumed]);
+  }, [duration]);
 
   // Periodic watch progress reporter
   useEffect(() => {
     const interval = setInterval(() => {
-      if (videoRef.current && currentTime > 0) {
-        const isCompleted = duration > 0 && currentTime >= duration * 0.92;
-        fetch(`/api/progress/${item.id}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            position_seconds: currentTime,
-            duration_seconds: duration,
-            completed: isCompleted ? 1 : 0
-          })
-        }).catch(() => {});
-
-        if (onProgressUpdate) {
-          onProgressUpdate(item.id, currentTime, duration, isCompleted);
-        }
+      if (!isSeekingRef.current && currentTime > 0) {
+        saveProgress(currentTime);
       }
     }, 5000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      // Save on unmount
+      const finalPos = streamOffsetRef.current + (videoRef.current ? videoRef.current.currentTime : 0);
+      saveProgress(finalPos);
+    };
   }, [currentTime, duration, item.id]);
+
+  // Commit seek to backend stream and video element
+  const commitSeek = (targetTime) => {
+    const maxDur = duration || item.duration || targetTime;
+    const clamped = Math.max(0, Math.min(targetTime, maxDur > 0 ? maxDur : targetTime));
+    
+    isSeekingRef.current = false;
+    setIsSeeking(false);
+    setIsBuffering(true);
+    streamOffsetRef.current = clamped;
+    setStreamOffset(clamped);
+    setCurrentTime(clamped);
+    setSeekPreviewTime(clamped);
+
+    const newUrl = getStreamUrl(clamped);
+    setStreamSrc(newUrl);
+
+    if (videoRef.current) {
+      videoRef.current.src = newUrl;
+      videoRef.current.playbackRate = playbackRate;
+      videoRef.current.load();
+      videoRef.current.play().then(() => {
+        setIsPlaying(true);
+      }).catch(() => {});
+    }
+
+    saveProgress(clamped);
+    resetControlsTimer();
+  };
+
+  const seekBy = (seconds) => {
+    const current = isSeekingRef.current 
+      ? seekPreviewTime 
+      : (streamOffsetRef.current + (videoRef.current ? videoRef.current.currentTime : 0));
+    commitSeek(current + seconds);
+  };
 
   // Keyboard hotkeys
   useEffect(() => {
@@ -86,18 +154,20 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
       } else if (e.key === 'f') {
         e.preventDefault();
         toggleFullscreen();
-      } else if (e.key === 'ArrowRight') {
+      } else if (e.key === 'ArrowRight' || e.key === 'l') {
+        e.preventDefault();
         seekBy(10);
-      } else if (e.key === 'ArrowLeft') {
+      } else if (e.key === 'ArrowLeft' || e.key === 'j') {
+        e.preventDefault();
         seekBy(-10);
       } else if (e.key === 'Escape') {
-        onClose();
+        handleClose();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying]);
+  }, [isPlaying, seekPreviewTime, currentTime]);
 
   const togglePlay = () => {
     if (!videoRef.current) return;
@@ -105,22 +175,27 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
       videoRef.current.pause();
       setIsPlaying(false);
     } else {
-      videoRef.current.play();
+      videoRef.current.play().catch(() => {});
       setIsPlaying(true);
     }
+    resetControlsTimer();
   };
 
-  const seekBy = (seconds) => {
-    if (!videoRef.current) return;
-    videoRef.current.currentTime = Math.max(0, Math.min(videoRef.current.currentTime + seconds, duration));
-  };
-
-  const handleSeek = (e) => {
-    const time = parseFloat(e.target.value);
-    setCurrentTime(time);
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
+  const handleVideoClick = () => {
+    if (!showControls) {
+      setShowControls(true);
+      resetControlsTimer();
+    } else {
+      togglePlay();
     }
+  };
+
+  const handleClose = () => {
+    const finalPos = isSeekingRef.current 
+      ? seekPreviewTime 
+      : (streamOffsetRef.current + (videoRef.current ? videoRef.current.currentTime : 0));
+    saveProgress(finalPos);
+    onClose();
   };
 
   const handleVolumeChange = (e) => {
@@ -172,27 +247,51 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
   };
 
   const formatTime = (sec) => {
-    if (isNaN(sec) || !sec) return '0:00';
-    const m = Math.floor(sec / 60);
+    if (isNaN(sec) || !sec || sec <= 0) return '0:00';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
     const s = Math.floor(sec % 60);
+    if (h > 0) {
+      return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    }
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
+
+  const displayedTime = isSeeking ? seekPreviewTime : currentTime;
 
   return (
     <div 
       ref={containerRef}
       onMouseMove={handleMouseMove}
+      onTouchStart={resetControlsTimer}
       className="fixed inset-0 z-50 bg-black flex items-center justify-center select-none"
     >
       {/* Video Element */}
       <video
         ref={videoRef}
-        src={streamUrl}
+        src={streamSrc}
         autoPlay
         playsInline
-        onClick={togglePlay}
+        onClick={handleVideoClick}
+        onWaiting={() => setIsBuffering(true)}
+        onPlaying={() => { setIsBuffering(false); setIsPlaying(true); }}
+        onCanPlay={() => setIsBuffering(false)}
+        onEnded={() => {
+          setIsPlaying(false);
+          if (duration > 0) saveProgress(duration);
+        }}
         className="w-full h-full object-contain cursor-pointer"
       />
+
+      {/* Buffering Indicator */}
+      {isBuffering && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none bg-black/20">
+          <div className="p-3.5 rounded-2xl bg-zinc-900/80 backdrop-blur-md flex items-center gap-3 text-white border border-white/10 shadow-2xl">
+            <Loader2 className="w-5 h-5 animate-spin text-indigo-400" />
+            <span className="text-xs font-medium">Buffering...</span>
+          </div>
+        </div>
+      )}
 
       {/* Top Header Controls */}
       <div 
@@ -223,7 +322,7 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
         </div>
 
         <button
-          onClick={onClose}
+          onClick={handleClose}
           className="p-2.5 rounded-full bg-black/50 hover:bg-white/20 text-white transition backdrop-blur-md"
         >
           <X className="w-5 h-5" />
@@ -238,20 +337,34 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
       >
         {/* Scrubber Slider */}
         <div className="flex items-center gap-3">
-          <span className="text-xs font-mono text-zinc-300 w-12 text-right">
-            {formatTime(currentTime)}
+          <span className="text-xs font-mono text-zinc-300 min-w-[56px] text-right">
+            {formatTime(displayedTime)}
           </span>
 
           <input
             type="range"
             min={0}
             max={duration || 100}
-            value={currentTime}
-            onChange={handleSeek}
+            step={0.5}
+            value={displayedTime}
+            onPointerDown={() => {
+              isSeekingRef.current = true;
+              setIsSeeking(true);
+              setSeekPreviewTime(currentTime);
+            }}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              isSeekingRef.current = true;
+              setIsSeeking(true);
+              setSeekPreviewTime(val);
+            }}
+            onPointerUp={(e) => commitSeek(parseFloat(e.target.value))}
+            onTouchEnd={(e) => commitSeek(parseFloat(e.target.value))}
+            onKeyUp={(e) => commitSeek(parseFloat(e.target.value))}
             className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:h-2.5 transition-all"
           />
 
-          <span className="text-xs font-mono text-zinc-400 w-12">
+          <span className="text-xs font-mono text-zinc-400 min-w-[56px]">
             {formatTime(duration)}
           </span>
         </div>
@@ -271,7 +384,7 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
             <button
               onClick={() => seekBy(-10)}
               className="p-2 rounded-full text-zinc-300 hover:text-white hover:bg-white/10 transition"
-              title="Rewind 10s"
+              title="Rewind 10s (Left Arrow / J)"
             >
               <RotateCcw className="w-4 h-4" />
             </button>
@@ -280,7 +393,7 @@ export default function VideoPlayerModal({ item, onClose, onProgressUpdate }) {
             <button
               onClick={() => seekBy(30)}
               className="p-2 rounded-full text-zinc-300 hover:text-white hover:bg-white/10 transition"
-              title="Fast Forward 30s"
+              title="Fast Forward 30s (Right Arrow / L)"
             >
               <RotateCw className="w-4 h-4" />
             </button>

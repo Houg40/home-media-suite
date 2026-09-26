@@ -20,15 +20,17 @@ function streamVideo(req, res, mediaItem) {
     return res.status(404).send('Media file not found on disk');
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const rawExt = path.extname(filePath);
+  const ext = rawExt.replace(/[-_.]+$/, '').toLowerCase();
   const codec = (mediaItem.codec || '').toLowerCase();
   const stat = fs.statSync(filePath);
   const fileSize = stat.size;
 
+  const seekTime = Math.max(0, parseFloat(req.query.startTime || req.query.t) || 0);
   const isNative = NATIVE_VIDEO_CONTAINERS.has(ext) && (NATIVE_VIDEO_CODECS.has(codec) || !codec);
 
-  // 1. DIRECT PLAY: Byte-range request for native video
-  if (isNative) {
+  // 1. DIRECT PLAY: Byte-range request for native video (only when not seeking via server offset)
+  if (isNative && seekTime === 0) {
     const range = req.headers.range;
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -57,13 +59,12 @@ function streamVideo(req, res, mediaItem) {
     return;
   }
 
-  // 2. ON-THE-FLY ADAPTIVE TRANSCODE / REMUX
-  // Supports MKV, AVI, WMV, FLV, TS, HEVC, AC3, DTS etc.
-  const seekTime = parseFloat(req.query.startTime) || 0;
-
-  // Decide if video stream can be copied or must be transcoded
+  // 2. ON-THE-FLY ADAPTIVE TRANSCODE / REMUX OR TIME-SEEK STREAM
+  // Supports MKV, AVI, WMV, FLV, TS, HEVC, AC3, DTS, or native files when seeking
   const canCopyVideo = NATIVE_VIDEO_CODECS.has(codec);
-  const videoCodecArg = canCopyVideo ? ['-c:v', 'copy'] : ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23'];
+  const videoCodecArg = canCopyVideo 
+    ? ['-c:v', 'copy'] 
+    : ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p'];
   const audioCodecArg = ['-c:a', 'aac', '-b:a', '192k', '-ac', '2'];
 
   const ffmpegArgs = [
@@ -71,6 +72,7 @@ function streamVideo(req, res, mediaItem) {
     '-i', filePath,
     ...videoCodecArg,
     ...audioCodecArg,
+    '-avoid_negative_ts', 'make_zero',
     '-f', 'mp4',
     '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
     'pipe:1'
@@ -88,7 +90,11 @@ function streamVideo(req, res, mediaItem) {
 
   req.on('close', () => {
     try {
-      ffmpegProc.kill('SIGKILL');
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', ffmpegProc.pid.toString(), '/f', '/t'], { stdio: 'ignore' });
+      } else {
+        ffmpegProc.kill('SIGKILL');
+      }
     } catch (e) {}
   });
 
